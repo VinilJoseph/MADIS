@@ -11,7 +11,6 @@ Tools available to the LLM:
 
 from __future__ import annotations
 
-import contextvars
 import logging
 import os
 from typing import Optional
@@ -26,12 +25,6 @@ from dotenv import load_dotenv
 from core.vector_store import similarity_search, upsert_chunks
 
 load_dotenv()
-
-# ── Thread-id context (set by chat_node before LLM invocation) ──────────────
-# This avoids relying on the LLM to pass thread_id as a tool argument.
-_current_thread_id: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
-    "current_thread_id", default=None
-)
 
 ALPHA_VANTAGE_API_KEY = os.getenv("ALPHAVANTAGE_API_KEY", "")
 
@@ -59,13 +52,12 @@ async def web_search_tool(query: str) -> str:
 # ── RAG retrieval from Supabase ───────────────────────────────────────────────
 
 @tool
-async def rag_tool(query: str) -> str:
+async def rag_tool(query: str, thread_id: Optional[str] = None) -> str:
     """
     Retrieve relevant information from indexed documents (PDFs and crawled web pages).
     Always call this first when a user asks about uploaded documents or any indexed content.
+    Include thread_id so only documents relevant to this conversation are returned.
     """
-    # Read thread_id from context (set by chat_node before LLM is called)
-    thread_id = _current_thread_id.get()
     logger.info("rag_tool: query=%r thread_id=%s", query[:80], thread_id)
 
     results = await similarity_search(query=query, thread_id=thread_id, k=5)
@@ -88,7 +80,7 @@ async def rag_tool(query: str) -> str:
 # ── crawl4AI web ingestion ────────────────────────────────────────────────────
 
 @tool
-async def crawl_url_tool(url: str) -> str:
+async def crawl_url_tool(url: str, thread_id: Optional[str] = None) -> str:
     """
     Crawl a web URL using crawl4AI, extract the content, and index it into the
     knowledge base so it can be retrieved via rag_tool.
@@ -96,7 +88,6 @@ async def crawl_url_tool(url: str) -> str:
     Use this when the user wants to add a website to the knowledge base.
     """
     from core.crawler import crawl_and_ingest_url
-    thread_id = _current_thread_id.get()
     logger.info("crawl_url_tool: url=%s thread_id=%s", url, thread_id)
 
     result = await crawl_and_ingest_url(url=url, thread_id=thread_id or "default")
@@ -104,12 +95,12 @@ async def crawl_url_tool(url: str) -> str:
     if result.get("success"):
         logger.info("crawl_url_tool: success url=%s chunks=%d", url, result['chunks_inserted'])
         return (
-            f"Crawled and indexed: {url}\n"
+            f"✅ Crawled and indexed: {url}\n"
             f"Chunks indexed: {result['chunks_inserted']}\n"
             f"Content preview: {result['preview']}"
         )
     logger.warning("crawl_url_tool: failed url=%s error=%s", url, result.get('error', 'Unknown error'))
-    return f"Crawl failed for {url}: {result.get('error', 'Unknown error')}"
+    return f"❌ Crawl failed for {url}: {result.get('error', 'Unknown error')}"
 
 
 # ── Calculator ────────────────────────────────────────────────────────────────
