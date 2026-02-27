@@ -265,6 +265,12 @@ async def chat_node(state: AgentState, config: RunnableConfig | None = None) -> 
     if config and isinstance(config, dict):
         thread_id = config.get("configurable", {}).get("thread_id")
 
+    # Set thread_id in context var so rag_tool/crawl_url_tool can read it
+    # without relying on the LLM to pass it as an argument
+    from core.tools import _current_thread_id
+    _current_thread_id.set(thread_id)
+    logger.debug("chat_node: set _current_thread_id=%s", thread_id)
+
     # Build dynamic system prompt
     sources_info = ""
     indexed = state.get("indexed_sources") or []
@@ -284,8 +290,7 @@ async def chat_node(state: AgentState, config: RunnableConfig | None = None) -> 
         "  • crawl_url_tool — crawl a URL and add it to the knowledge base\n"
         "  • calculator — perform arithmetic\n"
         "  • get_stock_price — fetch live stock quotes\n\n"
-        "Always call rag_tool before answering questions about uploaded documents. "
-        f"Pass thread_id='{thread_id}' when calling rag_tool or crawl_url_tool."
+        "Always call rag_tool before answering questions about uploaded documents."
         f"{sources_info}"
         f"{summary_section}"
     )

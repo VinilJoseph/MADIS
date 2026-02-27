@@ -11,26 +11,32 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import requests as _requests
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger("core.vector_store")
 
-import google.generativeai as genai
 from dotenv import load_dotenv
 from supabase import Client, create_client
 
 load_dotenv()
 
-# ── Gemini embeddings (768-dim, free tier) ────────────────────────────────────
-genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-GEMINI_EMBED_MODEL = os.getenv("GEMINI_EMBED_MODEL", "models/text-embedding-004")
+# ── Gemini embeddings via REST (768-dim, compatible with DB schema) ─────────
+# The deprecated google.generativeai SDK cannot reach text-embedding-004.
+# We call the REST API directly using gemini-embedding-001 with outputDimensionality=768.
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+GEMINI_EMBED_MODEL = "gemini-embedding-001"   # replaces deprecated text-embedding-004
 EMBED_DIM = 768
+_EMBED_URL = (
+    f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_EMBED_MODEL}:embedContent"
+)
 
 # ── Supabase client ───────────────────────────────────────────────────────────
 _supabase: Optional[Client] = None
 _supabase_enabled: bool = False
-_supabase_checked: bool = False   # Sentinel: once checked, don't retry
+_supabase_last_attempt: float = 0.0   # timestamp of last connection attempt
+_RETRY_INTERVAL: float = 30.0          # retry after 30s on failure
 
 
 def _supabase_config_ok() -> bool:
@@ -51,11 +57,20 @@ def get_supabase() -> Optional[Client]:
 
 
 async def _ensure_supabase_connected() -> Optional[Client]:
-    """Async one-shot Supabase connection init. Runs network call in thread pool."""
-    global _supabase, _supabase_enabled, _supabase_checked
-    if _supabase_checked:
+    """Async Supabase connection init with retry. Runs network call in thread pool."""
+    import time
+    global _supabase, _supabase_enabled, _supabase_last_attempt
+
+    # If already connected and healthy, return early
+    if _supabase_enabled and _supabase is not None:
         return _supabase
-    _supabase_checked = True
+
+    # Throttle retries: don't hammer the connection if it keeps failing
+    now = time.monotonic()
+    if not _supabase_enabled and (now - _supabase_last_attempt) < _RETRY_INTERVAL:
+        return None   # still within back-off window
+
+    _supabase_last_attempt = now
 
     if not _supabase_config_ok():
         logger.warning("Supabase not configured — vector storage disabled.")
@@ -81,7 +96,8 @@ async def _ensure_supabase_connected() -> Optional[Client]:
         _supabase_enabled = True
         logger.info("Supabase connected OK → %s", url)
     except asyncio.TimeoutError:
-        logger.warning("Supabase connection timed out (>8s) — vector storage disabled.")
+        logger.warning("Supabase connection timed out (>8s) — will retry in %ds.", int(_RETRY_INTERVAL))
+        _supabase_enabled = False
     except Exception as e:
         msg = str(e)
         if "525" in msg or "ssl" in msg.lower() or "handshake" in msg.lower():
@@ -94,19 +110,40 @@ async def _ensure_supabase_connected() -> Optional[Client]:
 
 # ── Embedding helpers ─────────────────────────────────────────────────────────
 
-async def embed_text(text: str, task_type: str = "retrieval_document") -> List[float]:
-    """Get Gemini embedding, returns zero-vector on failure."""
+def _embed_sync(text: str, task_type: str) -> List[float]:
+    """Call Gemini REST API synchronously. Returns zero-vector on failure."""
+    # Map LangChain-style task_type to Gemini API taskType
+    task_map = {
+        "retrieval_document": "RETRIEVAL_DOCUMENT",
+        "retrieval_query": "RETRIEVAL_QUERY",
+        "semantic_similarity": "SEMANTIC_SIMILARITY",
+    }
+    gemini_task = task_map.get(task_type, "RETRIEVAL_DOCUMENT")
     try:
-        result = await asyncio.to_thread(
-            genai.embed_content,
-            model=GEMINI_EMBED_MODEL,
-            content=text,
-            task_type=task_type,
+        resp = _requests.post(
+            _EMBED_URL,
+            params={"key": GEMINI_API_KEY},
+            json={
+                "content": {"parts": [{"text": text}]},
+                "taskType": gemini_task,
+                "outputDimensionality": EMBED_DIM,
+            },
+            timeout=30,
         )
-        return result["embedding"]
+        resp.raise_for_status()
+        values = resp.json().get("embedding", {}).get("values", [])
+        if len(values) != EMBED_DIM:
+            logger.error("Embedding dim mismatch: got %d, expected %d", len(values), EMBED_DIM)
+            return [0.0] * EMBED_DIM
+        return values
     except Exception as e:
-        logger.exception("Embedding error: %s", e)
+        logger.exception("Embedding REST error: %s", e)
         return [0.0] * EMBED_DIM
+
+
+async def embed_text(text: str, task_type: str = "retrieval_document") -> List[float]:
+    """Get Gemini embedding via REST, returns zero-vector on failure."""
+    return await asyncio.to_thread(_embed_sync, text, task_type)
 
 
 async def embed_query(text: str) -> List[float]:

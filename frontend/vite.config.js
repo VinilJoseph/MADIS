@@ -6,17 +6,27 @@ export default defineConfig({
   plugins: [react()],
   server: {
     proxy: {
-      // Proxy all backend API routes to FastAPI on port 8000
-      '/ingest-pdf':    'http://localhost:8000',
-      '/chat':          'http://localhost:8000',
-      '/crawl':         'http://localhost:8000',
-      '/sessions':      'http://localhost:8000',
-      '/memory':        'http://localhost:8000',
-      '/analytics':     'http://localhost:8000',
-      '/mcp':           'http://localhost:8000',
-      '/health':        'http://localhost:8000',
-      // Legacy endpoint (kept for backward compat)
-      '/analyze-pdf':   'http://localhost:8000',
+      // /chat uses SSE streaming — disable proxy buffering so tokens flow in real-time
+      '/chat': {
+        target: 'http://localhost:8000',
+        changeOrigin: true,
+        // Disable response buffering for SSE
+        configure: (proxy) => {
+          proxy.on('proxyRes', (proxyRes, req, res) => {
+            // Tell Node's http-proxy to flush chunks immediately (SSE support)
+            proxyRes.pipe(res, { end: true });
+          });
+        },
+      },
+      // All other backend API routes
+      '/ingest-pdf':  { target: 'http://localhost:8000', changeOrigin: true },
+      '/crawl':       { target: 'http://localhost:8000', changeOrigin: true },
+      '/sessions':    { target: 'http://localhost:8000', changeOrigin: true },
+      '/memory':      { target: 'http://localhost:8000', changeOrigin: true },
+      '/analytics':   { target: 'http://localhost:8000', changeOrigin: true },
+      '/mcp':         { target: 'http://localhost:8000', changeOrigin: true },
+      '/health':      { target: 'http://localhost:8000', changeOrigin: true },
+      '/analyze-pdf': { target: 'http://localhost:8000', changeOrigin: true },
     }
   }
 })

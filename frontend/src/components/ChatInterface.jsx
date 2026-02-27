@@ -114,8 +114,9 @@ export default function ChatInterface({ threadId, sessionId, indexedSources = []
 
       const reader = resp.body.getReader();
       const decoder = new TextDecoder();
+      let streamDone = false;
 
-      while (true) {
+      while (!streamDone) {
         const { done, value } = await reader.read();
         if (done) break;
 
@@ -142,11 +143,14 @@ export default function ChatInterface({ threadId, sessionId, indexedSources = []
               setActiveTool(null);
             } else if (data.type === 'done') {
               console.log('[ChatInterface] stream done. total chars=%d tool_calls=%d', fullContent.length, toolCallsForMsg.length);
+              streamDone = true;
               break;
             } else if (data.type === 'error') {
               console.error('[ChatInterface] server error:', data.message);
               fullContent = `Error: ${data.message}`;
               setStreamContent(fullContent);
+              streamDone = true;
+              break;
             }
           } catch { }
         }

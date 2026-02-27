@@ -273,30 +273,55 @@ async def chat(req: ChatRequest):
     async def event_stream() -> AsyncGenerator[str, None]:
         logger.debug("Starting SSE event stream for thread_id=%s", req.thread_id)
         try:
-            # Lazily initialise the async chat graph (AsyncSqliteSaver requires await)
             chat_graph = await get_chat_graph()
-            # Use astream_events v2 for fine-grained streaming
-            async for event in chat_graph.astream_events(inp, config=config, version="v2"):
-                kind = event.get("event", "")
 
-                # Stream LLM text tokens
-                if kind == "on_chat_model_stream":
-                    chunk = event.get("data", {}).get("chunk")
-                    if chunk and hasattr(chunk, "content") and chunk.content:
-                        content = chunk.content
-                        if isinstance(content, str):
-                            yield f"data: {json.dumps({'type': 'token', 'content': content})}\n\n"
+            from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
 
-                # Notify when a tool is invoked
-                elif kind == "on_tool_start":
-                    tool_name = event.get("name", "tool")
-                    inputs = event.get("data", {}).get("input", {})
-                    yield f"data: {json.dumps({'type': 'tool_start', 'tool': tool_name, 'input': str(inputs)[:200]})}\n\n"
+            # Track seen message IDs to avoid replaying history from checkpointer.
+            # astream(stream_mode="messages") yields ALL messages in state, not just new ones.
+            seen_ids: set = set()
 
-                # Notify when tool finishes
-                elif kind == "on_tool_end":
-                    tool_name = event.get("name", "tool")
-                    yield f"data: {json.dumps({'type': 'tool_end', 'tool': tool_name})}\n\n"
+            async for msg_chunk, metadata in chat_graph.astream(
+                inp, config=config, stream_mode="messages"
+            ):
+                msg_id = getattr(msg_chunk, "id", None)
+                if msg_id and msg_id in seen_ids:
+                    continue   # skip replayed history messages
+                if msg_id:
+                    seen_ids.add(msg_id)
+
+                # Only process messages from the chat_node (not tool results etc.)
+                node_name = metadata.get("langgraph_node", "")
+
+                if isinstance(msg_chunk, (AIMessage, AIMessageChunk)):
+                    content = msg_chunk.content
+
+                    # Notify frontend when the LLM decides to call a tool
+                    # AIMessageChunk has tool_call_chunks; AIMessage has tool_calls
+                    tool_calls = (
+                        getattr(msg_chunk, "tool_call_chunks", None) or
+                        getattr(msg_chunk, "tool_calls", None) or []
+                    )
+                    for tc in tool_calls:
+                        name = tc.get("name") if isinstance(tc, dict) else getattr(tc, "name", None)
+                        if name:
+                            yield f"data: {json.dumps({'type': 'tool_start', 'tool': name, 'input': ''})}\n\n"
+
+                    # Only emit text content — skip pure tool-call messages (empty content)
+                    if isinstance(content, str) and content.strip():
+                        yield f"data: {json.dumps({'type': 'token', 'content': content})}\n\n"
+                    elif isinstance(content, list):
+                        # Groq sometimes returns list of content blocks
+                        text = "".join(
+                            p.get("text", "") if isinstance(p, dict) else str(p)
+                            for p in content
+                        ).strip()
+                        if text:
+                            yield f"data: {json.dumps({'type': 'token', 'content': text})}\n\n"
+
+                elif isinstance(msg_chunk, ToolMessage):
+                    # Tool has finished — notify the frontend
+                    yield f"data: {json.dumps({'type': 'tool_end', 'tool': msg_chunk.name or 'tool'})}\n\n"
 
             yield f"data: {json.dumps({'type': 'done'})}\n\n"
 
