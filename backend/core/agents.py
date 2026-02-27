@@ -265,12 +265,6 @@ async def chat_node(state: AgentState, config: RunnableConfig | None = None) -> 
     if config and isinstance(config, dict):
         thread_id = config.get("configurable", {}).get("thread_id")
 
-    # Set thread_id in context var so rag_tool/crawl_url_tool can read it
-    # without relying on the LLM to pass it as an argument
-    from core.tools import _current_thread_id
-    _current_thread_id.set(thread_id)
-    logger.debug("chat_node: set _current_thread_id=%s", thread_id)
-
     # Build dynamic system prompt
     sources_info = ""
     indexed = state.get("indexed_sources") or []
@@ -282,33 +276,19 @@ async def chat_node(state: AgentState, config: RunnableConfig | None = None) -> 
     conv_summary = state.get("conversation_summary", "")
     summary_section = f"\n\nEarlier conversation summary:\n{conv_summary}" if conv_summary else ""
 
-    from datetime import datetime, timezone
-    now_str = datetime.now(timezone.utc).strftime("%A, %B %d, %Y at %H:%M UTC")
-
     system_prompt = (
-        f"You are an intelligent document analysis and research assistant.\n"
-        f"Today's date and time: {now_str}\n\n"
-        "## Tools Available\n"
-        "  • rag_tool — search uploaded PDFs and crawled web pages\n"
-        "  • web_search_tool — live web search for current information\n"
-        "  • crawl_url_tool — crawl a URL and add to knowledge base\n"
-        "  • calculator — arithmetic operations\n"
-        "  • get_stock_price — live stock quotes\n\n"
-        "## Critical Rules (follow strictly)\n"
-        "1. **Always call rag_tool first** for any question about uploaded documents.\n"
-        "2. **Never hallucinate or guess.** If the retrieved chunks do not contain "
-        "the requested information, respond with: "
-        "'The document does not contain information about [topic].'\n"
-        "3. **Use today's date** for any age, duration, or time calculations.\n"
-        "4. **Be concise and factual.** Do not repeat yourself.\n"
-        "5. **Cite the source** when quoting or summarizing document content.\n"
+        "You are an intelligent document analysis and research assistant. "
+        "You have access to the following tools:\n"
+        "  • rag_tool — search uploaded PDFs and crawled web pages (use this FIRST for document questions)\n"
+        "  • web_search_tool — search the live web for current information\n"
+        "  • crawl_url_tool — crawl a URL and add it to the knowledge base\n"
+        "  • calculator — perform arithmetic\n"
+        "  • get_stock_price — fetch live stock quotes\n\n"
+        "Always call rag_tool before answering questions about uploaded documents. "
+        f"Pass thread_id='{thread_id}' when calling rag_tool or crawl_url_tool."
+        f"{sources_info}"
+        f"{summary_section}"
     )
-
-    if indexed:
-        system_prompt += "\n## Indexed Sources\n" + "\n".join(f"  - {s}" for s in indexed) + "\n"
-
-    if conv_summary:
-        system_prompt += f"\n## Earlier Conversation Summary\n{conv_summary}\n"
 
     messages = [SystemMessage(content=system_prompt)] + list(state["messages"])
 

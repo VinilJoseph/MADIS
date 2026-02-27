@@ -1,7 +1,7 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Brain, FileText, MessageSquare, Globe, Activity, Database,
-  BarChart2, ChevronRight, Sparkles, Cpu, Server, Plus
+  BarChart2, ChevronRight, Sparkles, Cpu, Server
 } from 'lucide-react';
 
 import PDFUploader from './components/PDFUploader';
@@ -9,25 +9,54 @@ import ChatInterface from './components/ChatInterface';
 import WebCrawler from './components/WebCrawler';
 import AgentTrace from './components/AgentTrace';
 import MemoryViewer from './components/MemoryViewer';
-import SessionSidebar from './components/SessionSidebar';
 
 // ── Page metadata ─────────────────────────────────────────────────────────────
 const PAGES = [
-  { id: 'pdf',     label: 'PDF Analyzer', icon: FileText,       title: 'PDF Analyzer',  subtitle: 'Upload and analyze documents with multi-agent AI' },
-  { id: 'chat',    label: 'RAG Chat',     icon: MessageSquare,  title: 'RAG Chat',      subtitle: 'Ask questions — powered by short + long-term memory' },
-  { id: 'crawler', label: 'Web Crawler',  icon: Globe,          title: 'Web Crawler',   subtitle: 'Crawl any URL and add it to your knowledge base' },
-  { id: 'memory',  label: 'Memory',       icon: Database,       title: 'Memory Viewer', subtitle: 'Inspect short-term (SQLite) and long-term (Supabase) memory' },
-  { id: 'trace',   label: 'Agent Trace',  icon: Cpu,            title: 'Agent Trace',   subtitle: 'Live LangGraph execution timeline and analytics' },
+  {
+    id: 'pdf',
+    label: 'PDF Analyzer',
+    icon: FileText,
+    title: 'PDF Analyzer',
+    subtitle: 'Upload and analyze documents with multi-agent AI',
+  },
+  {
+    id: 'chat',
+    label: 'RAG Chat',
+    icon: MessageSquare,
+    title: 'RAG Chat',
+    subtitle: 'Ask questions — powered by short + long-term memory',
+  },
+  {
+    id: 'crawler',
+    label: 'Web Crawler',
+    icon: Globe,
+    title: 'Web Crawler',
+    subtitle: 'Crawl any URL and add it to your knowledge base',
+  },
+  {
+    id: 'memory',
+    label: 'Memory',
+    icon: Database,
+    title: 'Memory Viewer',
+    subtitle: 'Inspect short-term (SQLite) and long-term (Supabase) memory',
+  },
+  {
+    id: 'trace',
+    label: 'Agent Trace',
+    icon: Cpu,
+    title: 'Agent Trace',
+    subtitle: 'Live LangGraph execution timeline and analytics',
+  },
 ];
-
-const LS_THREAD_KEY  = 'ragchat_thread_id';
-const LS_SOURCES_KEY = 'ragchat_sources';
 
 function Sidebar({ activePage, onNavigate, indexedCount, messageCount }) {
   return (
     <nav className="sidebar">
+      {/* Logo */}
       <div className="sidebar-logo">
-        <div className="sidebar-logo-icon"><Brain size={20} color="white" /></div>
+        <div className="sidebar-logo-icon">
+          <Brain size={20} color="white" />
+        </div>
         <div>
           <div className="sidebar-logo-text">RAG Agent</div>
           <div className="sidebar-logo-sub">Agentic AI Platform</div>
@@ -54,33 +83,55 @@ function Sidebar({ activePage, onNavigate, indexedCount, messageCount }) {
           </button>
         );
       })}
+
+      {/* Footer */}
+      <div style={{ marginTop: 'auto', paddingTop: 16, borderTop: '1px solid var(--border)' }}>
+        <div style={{ padding: '10px 12px', fontSize: 11, color: 'var(--text-muted)', lineHeight: 1.7 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+            <Server size={11} /> <span>LangGraph + MCP</span>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+            <Database size={11} /> <span>Supabase pgvector</span>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <Activity size={11} /> <span>LangSmith tracing</span>
+          </div>
+        </div>
+      </div>
     </nav>
   );
 }
 
+// ── Welcome overlay (first load) ─────────────────────────────────────────────
+
 function WelcomeBanner({ onStart }) {
   const features = [
     { icon: FileText,     color: '#f59e0b', label: 'PDF Analysis',    desc: 'Multi-agent parallel analysis' },
-    { icon: MessageSquare,color: '#5b72ff', label: 'RAG Chat',        desc: 'Short + long-term memory' },
-    { icon: Globe,        color: '#14b8a6', label: 'Web Crawling',    desc: 'crawl4AI + Supabase pgvector' },
-    { icon: Cpu,          color: '#8b5cf6', label: 'LangGraph',       desc: 'Agentic orchestration' },
-    { icon: Activity,     color: '#f472b6', label: 'LangSmith',       desc: 'Full trace observability' },
-    { icon: Server,       color: '#10b981', label: 'MCP Server',      desc: 'External tool integration' },
+    { icon: MessageSquare,color: '#5b72ff', label: 'RAG Chat',         desc: 'Short + long-term memory' },
+    { icon: Globe,        color: '#14b8a6', label: 'Web Crawling',     desc: 'crawl4AI + Supabase pgvector' },
+    { icon: Cpu,          color: '#8b5cf6', label: 'LangGraph',        desc: 'Agentic orchestration' },
+    { icon: Activity,     color: '#f472b6', label: 'LangSmith',        desc: 'Full trace observability' },
+    { icon: Server,       color: '#10b981', label: 'MCP Server',       desc: 'External tool integration' },
   ];
 
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 40, textAlign: 'center' }}>
+      {/* Glow ring */}
       <div style={{ position: 'relative', marginBottom: 32 }}>
         <div style={{ width: 80, height: 80, borderRadius: '50%', background: 'var(--gradient-brand)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 0 60px rgba(91,114,255,0.4)', animation: 'glow-pulse 3s ease-in-out infinite' }}>
           <Brain size={36} color="white" />
         </div>
       </div>
+
       <h1 style={{ fontFamily: 'var(--font-head)', fontSize: 34, fontWeight: 700, marginBottom: 12, background: 'linear-gradient(135deg, #e8eaf6 0%, var(--accent-blue) 60%, var(--accent-purple) 100%)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
         Agentic RAG Chatbot
       </h1>
       <p style={{ fontSize: 16, color: 'var(--text-secondary)', maxWidth: 520, lineHeight: 1.7, marginBottom: 40 }}>
-        A full-stack AI platform combining LangGraph agents, RAG, multi-tier memory, web crawling, and MCP — built to showcase production-grade agentic AI.
+        A full-stack AI platform combining LangGraph agents, RAG, multi-tier memory,
+        web crawling, and MCP — built to showcase production-grade agentic AI.
       </p>
+
+      {/* Feature grid */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 14, maxWidth: 580, marginBottom: 40 }}>
         {features.map((f, i) => {
           const Icon = f.icon;
@@ -95,6 +146,7 @@ function WelcomeBanner({ onStart }) {
           );
         })}
       </div>
+
       <button className="btn btn-primary" onClick={onStart} style={{ padding: '14px 32px', fontSize: 15 }}>
         <Sparkles size={17} /> Get Started — Upload a PDF
       </button>
@@ -105,122 +157,33 @@ function WelcomeBanner({ onStart }) {
 // ── Main App ─────────────────────────────────────────────────────────────────
 
 export default function App() {
-  const [activePage, setActivePage]           = useState('welcome');
-  const [threadId, setThreadId]               = useState(null);
-  const [sessionId, setSessionId]             = useState(null);
-  const [indexedSources, setIndexedSources]   = useState([]);
-  const [lastTrace, setLastTrace]             = useState({ logs: [], analytics: null });
-  const [messageCount, setMessageCount]       = useState(0);
-  const [initialMessages, setInitialMessages] = useState(null);  // history hydration
-  const [isRestoring, setIsRestoring]         = useState(false);
+  const [activePage, setActivePage] = useState('welcome');
+  const [threadId, setThreadId] = useState(null);
+  const [sessionId, setSessionId] = useState(null);
+  const [indexedSources, setIndexedSources] = useState([]);  // [{name, type}]
+  const [lastTrace, setLastTrace] = useState({ logs: [], analytics: null });
+  const [messageCount, setMessageCount] = useState(0);
 
-  // ── Restore session from localStorage on first load ───────────────────────
-  useEffect(() => {
-    const savedThread  = localStorage.getItem(LS_THREAD_KEY);
-    const savedSources = localStorage.getItem(LS_SOURCES_KEY);
-    if (savedThread) {
-      console.log('[App] Restoring session from localStorage: thread_id=%s', savedThread);
-      setIsRestoring(true);
-      fetch(`/chat/history/${savedThread}`)
-        .then(r => r.ok ? r.json() : null)
-        .then(data => {
-          if (data && data.message_count > 0) {
-            setThreadId(savedThread);
-            // Convert {role:'human'/'ai', content} → {role:'user'/'ai', content, id}
-            const msgs = data.messages.map((m, i) => ({
-              role: m.role === 'human' ? 'user' : 'ai',
-              content: m.content,
-              id: i,
-            }));
-            setInitialMessages(msgs);
-            setMessageCount(msgs.filter(m => m.role === 'user').length);
-            // Restore sources from response or localStorage fallback
-            const srcs = data.sources?.length
-              ? data.sources.map(s => ({ name: s, type: 'pdf' }))
-              : JSON.parse(savedSources || '[]');
-            setIndexedSources(srcs);
-            setActivePage('chat');
-            console.log('[App] Session restored: %d messages, %d sources', msgs.length, srcs.length);
-          } else {
-            // Thread exists but is empty — clear stale localStorage
-            localStorage.removeItem(LS_THREAD_KEY);
-            localStorage.removeItem(LS_SOURCES_KEY);
-          }
-        })
-        .catch(e => console.warn('[App] Session restore failed:', e.message))
-        .finally(() => setIsRestoring(false));
-    }
-  }, []);
-
-  // ── Save thread to localStorage whenever it changes ───────────────────────
-  useEffect(() => {
-    if (threadId) {
-      localStorage.setItem(LS_THREAD_KEY, threadId);
-    }
-  }, [threadId]);
-
-  useEffect(() => {
-    if (indexedSources.length) {
-      localStorage.setItem(LS_SOURCES_KEY, JSON.stringify(indexedSources));
-    }
-  }, [indexedSources]);
-
-  // ── Handlers ─────────────────────────────────────────────────────────────
+  // Called by PDFUploader when analysis is complete
   const handleAnalysisComplete = (data) => {
-    console.log('[App] handleAnalysisComplete: thread_id=%s filename=%s', data.thread_id, data.filename);
+    console.log('[App] handleAnalysisComplete: thread_id=%s session_id=%s filename=%s', data.thread_id, data.session_id, data.filename);
     setThreadId(data.thread_id);
     setSessionId(data.session_id);
-    setInitialMessages(null);  // fresh chat for new upload
-    setIndexedSources(prev => [...prev, { name: data.filename, type: 'pdf' }]);
+    setIndexedSources(prev => [
+      ...prev,
+      { name: data.filename, type: 'pdf' }
+    ]);
     setLastTrace({ logs: data.agent_trace || [], analytics: data.analytics });
   };
 
+  // Called by WebCrawler when crawl is complete
   const handleCrawlComplete = (src) => {
     console.log('[App] handleCrawlComplete: source=%o', src);
     setIndexedSources(prev => [...prev, src]);
   };
 
-  // Resume a previous session from the session switcher
-  const handleSelectSession = useCallback(async (session) => {
-    console.log('[App] switching to session thread_id=%s', session.thread_id);
-    setIsRestoring(true);
-    try {
-      const res = await fetch(`/chat/history/${session.thread_id}`);
-      if (res.ok) {
-        const data = await res.json();
-        const msgs = data.messages.map((m, i) => ({
-          role: m.role === 'human' ? 'user' : 'ai',
-          content: m.content,
-          id: i,
-        }));
-        setThreadId(session.thread_id);
-        setInitialMessages(msgs);
-        setMessageCount(msgs.filter(m => m.role === 'user').length);
-        const srcs = data.sources?.map(s => ({ name: s, type: 'pdf' })) || [];
-        setIndexedSources(srcs);
-        setActivePage('chat');
-      }
-    } catch (e) {
-      console.warn('[App] handleSelectSession error:', e.message);
-    } finally {
-      setIsRestoring(false);
-    }
-  }, []);
-
-  // Start a completely new session
-  const handleNewSession = useCallback(() => {
-    console.log('[App] Starting new session');
-    localStorage.removeItem(LS_THREAD_KEY);
-    localStorage.removeItem(LS_SOURCES_KEY);
-    setThreadId(null);
-    setSessionId(null);
-    setInitialMessages(null);
-    setIndexedSources([]);
-    setMessageCount(0);
-    setActivePage('pdf');
-  }, []);
-
   const onNavigate = (pageId) => {
+    console.log('[App] navigating to page: %s', pageId);
     setActivePage(pageId);
   };
 
@@ -242,15 +205,6 @@ export default function App() {
             threadId={threadId}
             sessionId={sessionId}
             indexedSources={indexedSources}
-            initialMessages={initialMessages}
-            onMessageCountChange={setMessageCount}
-            sessionSidebar={
-              <SessionSidebar
-                activeThreadId={threadId}
-                onSelectSession={handleSelectSession}
-                onNewSession={handleNewSession}
-              />
-            }
           />
         );
       case 'crawler':
@@ -278,6 +232,7 @@ export default function App() {
 
   return (
     <div className="app-layout">
+      {/* Sidebar */}
       <Sidebar
         activePage={activePage}
         onNavigate={onNavigate}
@@ -285,8 +240,9 @@ export default function App() {
         messageCount={messageCount}
       />
 
+      {/* Main */}
       <div className="main-content">
-        {/* Status bar */}
+        {/* Status bar when thread is active */}
         {threadId && activePage !== 'welcome' && (
           <div style={{ background: 'rgba(20,184,166,0.06)', borderBottom: '1px solid rgba(20,184,166,0.2)', padding: '8px 24px', display: 'flex', alignItems: 'center', gap: 12, fontSize: 12 }}>
             <span className="pulse-dot" />
@@ -295,13 +251,6 @@ export default function App() {
             <span style={{ color: 'var(--text-muted)', marginLeft: 8 }}>
               {indexedSources.length} source{indexedSources.length !== 1 ? 's' : ''} indexed
             </span>
-            {isRestoring && <span style={{ color: 'var(--accent-blue)', fontSize: 11 }}>Restoring session...</span>}
-            <button
-              onClick={handleNewSession}
-              style={{ marginLeft: 'auto', background: 'none', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 6, padding: '3px 10px', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 11, display: 'flex', alignItems: 'center', gap: 4 }}
-            >
-              <Plus size={10} /> New Session
-            </button>
           </div>
         )}
 

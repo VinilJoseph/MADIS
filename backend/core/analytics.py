@@ -141,6 +141,9 @@ class AgentExecutionTracker:
             return {
                 'total_agents': 0,
                 'total_duration': 0,
+                'successful_agents': 0,
+                'failed_agents': 0,
+                'average_duration': 0,
                 'executions': []
             }
         

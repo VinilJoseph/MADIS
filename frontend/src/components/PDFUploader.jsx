@@ -9,17 +9,10 @@ const STAGES = [
   { key: 'done', label: 'Analysis complete!', progress: 100 },
 ];
 
-function StageProgress({ stage, embedProgress }) {
+function StageProgress({ stage }) {
   const idx = STAGES.findIndex(s => s.key === stage);
-
-  // During embedding: interpolate progress between 35% and 65% based on chunks done
-  let pct = idx >= 0 ? STAGES[idx].progress : 0;
-  let label = idx >= 0 ? STAGES[idx].label : '';
-  if (stage === 'embedding' && embedProgress?.total > 0) {
-    const frac = embedProgress.current / embedProgress.total;
-    pct = Math.round(35 + frac * 30);  // 35% → 65%
-    label = `Building vector index (${embedProgress.current}/${embedProgress.total})`;
-  }
+  const pct = idx >= 0 ? STAGES[idx].progress : 0;
+  const label = idx >= 0 ? STAGES[idx].label : '';
 
   return (
     <div style={{ padding: '24px 0' }}>
@@ -28,7 +21,7 @@ function StageProgress({ stage, embedProgress }) {
         <span style={{ color: 'var(--text-accent)' }}>{pct}%</span>
       </div>
       <div className="progress-bar-track">
-        <div className="progress-bar-fill" style={{ width: `${pct}%`, transition: 'width 0.4s ease' }} />
+        <div className="progress-bar-fill" style={{ width: `${pct}%` }} />
       </div>
       <div style={{ display: 'flex', gap: 8, marginTop: 16, flexWrap: 'wrap' }}>
         {STAGES.slice(0, idx + 1).map(s => (
@@ -64,7 +57,6 @@ export default function PDFUploader({ onAnalysisComplete }) {
   const [stage, setStage] = useState(null);
   const [error, setError] = useState(null);
   const [result, setResult] = useState(null);
-  const [embedProgress, setEmbedProgress] = useState(null); // { current, total }
   const fileInputRef = useRef(null);
 
   const handleDrop = useCallback((e) => {
@@ -92,7 +84,7 @@ export default function PDFUploader({ onAnalysisComplete }) {
 
   const handleIngest = async () => {
     if (!file) return;
-    console.log('[PDFUploader] Starting ingest (SSE) for file: %s', file.name);
+    console.log('[PDFUploader] Starting ingest for file: %s', file.name);
     setError(null); setResult(null); setStage('uploading');
 
     const threadId = `thread-${Date.now()}`;
@@ -101,57 +93,35 @@ export default function PDFUploader({ onAnalysisComplete }) {
     formData.append('thread_id', threadId);
 
     try {
+      setStage('uploading');
+      await new Promise(r => setTimeout(r, 400));
+
+      setStage('extracting');
+      await new Promise(r => setTimeout(r, 400));
+
+      setStage('embedding');
       const resp = await fetch('/ingest-pdf', { method: 'POST', body: formData });
-      if (!resp.ok) {
+
+      setStage('analyzing');
+      await new Promise(r => setTimeout(r, 800));
+
+      // Read body ONCE — a Response body can only be consumed once
+      let data;
+      const contentType = resp.headers.get('content-type') || '';
+      if (contentType.includes('application/json')) {
+        data = await resp.json();
+      } else {
         const text = await resp.text();
-        throw new Error(text || `Server error ${resp.status}`);
+        throw new Error(text || resp.statusText);
       }
 
-      const reader = resp.body.getReader();
-      const decoder = new TextDecoder();
-      let data = null;
-      let streamDone = false;
-
-      while (!streamDone) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        const chunk = decoder.decode(value, { stream: true });
-        for (const line of chunk.split('\n')) {
-          if (!line.startsWith('data: ')) continue;
-          try {
-            const evt = JSON.parse(line.slice(6));
-            console.log('[PDFUploader] SSE event:', evt);
-
-            if (evt.stage === 'extracting' || evt.stage === 'extracted') {
-              setStage('extracting');
-            } else if (evt.stage === 'embedding') {
-              // Update label with chunk progress
-              setStage('embedding');
-              // We update STAGES label dynamically below via stageLabel state
-              setEmbedProgress({ current: evt.chunk, total: evt.total });
-            } else if (evt.stage === 'embedded') {
-              setStage('analyzing');
-            } else if (evt.stage === 'analyzing') {
-              setStage('analyzing');
-            } else if (evt.stage === 'done') {
-              data = evt.data;
-              setStage('done');
-              streamDone = true;
-            } else if (evt.stage === 'error') {
-              throw new Error(evt.message || 'Processing failed');
-            }
-          } catch (parseErr) {
-            if (parseErr.message && parseErr.message !== 'Unexpected end of JSON input') {
-              throw parseErr;
-            }
-          }
-        }
+      if (!resp.ok) {
+        throw new Error(data?.detail || data?.message || resp.statusText);
       }
 
-      if (!data) throw new Error('No result received from server');
+      setStage('done');
       setResult(data);
-      console.log('[PDFUploader] Done: doc_type=%s chunks=%d', data.document_type, data.chunks_indexed);
+      console.log('[PDFUploader] Analysis complete: doc_type=%s chunks=%d', data.document_type, data.chunks_indexed);
       onAnalysisComplete?.(data);
     } catch (err) {
       console.error('[PDFUploader] Ingest failed:', err.message);
@@ -209,7 +179,7 @@ export default function PDFUploader({ onAnalysisComplete }) {
         )}
 
         {/* Progress */}
-        {stage && stage !== 'done' && <StageProgress stage={stage} embedProgress={embedProgress} />}
+        {stage && stage !== 'done' && <StageProgress stage={stage} />}
 
         {/* Ingest button */}
         {!stage && (

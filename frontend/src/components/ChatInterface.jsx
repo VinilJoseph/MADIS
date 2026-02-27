@@ -73,8 +73,8 @@ function StreamingBubble({ content, activeTool, activeInput }) {
   );
 }
 
-export default function ChatInterface({ threadId, sessionId, indexedSources = [], initialMessages = null, onMessageCountChange, sessionSidebar }) {
-  const [messages, setMessages] = useState(initialMessages || []);
+export default function ChatInterface({ threadId, sessionId, indexedSources = [] }) {
+  const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const [isStreaming, setIsStreaming] = useState(false);
   const [streamContent, setStreamContent] = useState('');
@@ -84,23 +84,7 @@ export default function ChatInterface({ threadId, sessionId, indexedSources = []
   const bottomRef = useRef(null);
   const textareaRef = useRef(null);
 
-  // Hydrate messages when session is restored from localStorage or user switches sessions
-  useEffect(() => {
-    if (initialMessages) {
-      setMessages(initialMessages);
-      onMessageCountChange?.(initialMessages.filter(m => m.role === 'user').length);
-    }
-  }, [initialMessages]);
-
-  // Reset chat when threadId changes (new session or session switch)
-  useEffect(() => {
-    if (!initialMessages) {
-      setMessages([]);
-      onMessageCountChange?.(0);
-    }
-    setStreamContent('');
-    setActiveTool(null);
-  }, [threadId]);
+  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages, streamContent]);
 
   const sendMessage = useCallback(async () => {
     const text = input.trim();
@@ -130,9 +114,8 @@ export default function ChatInterface({ threadId, sessionId, indexedSources = []
 
       const reader = resp.body.getReader();
       const decoder = new TextDecoder();
-      let streamDone = false;
 
-      while (!streamDone) {
+      while (true) {
         const { done, value } = await reader.read();
         if (done) break;
 
@@ -159,14 +142,11 @@ export default function ChatInterface({ threadId, sessionId, indexedSources = []
               setActiveTool(null);
             } else if (data.type === 'done') {
               console.log('[ChatInterface] stream done. total chars=%d tool_calls=%d', fullContent.length, toolCallsForMsg.length);
-              streamDone = true;
               break;
             } else if (data.type === 'error') {
               console.error('[ChatInterface] server error:', data.message);
               fullContent = `Error: ${data.message}`;
               setStreamContent(fullContent);
-              streamDone = true;
-              break;
             }
           } catch { }
         }
@@ -177,11 +157,12 @@ export default function ChatInterface({ threadId, sessionId, indexedSources = []
       setStreamContent(fullContent);
     }
 
-    setMessages(prev => {
-      const updated = [...prev, { role: 'ai', content: fullContent, toolCalls: toolCallsForMsg, id: Date.now() }];
-      onMessageCountChange?.(updated.filter(m => m.role === 'user').length);
-      return updated;
-    });
+    setMessages(prev => [...prev, {
+      role: 'ai',
+      content: fullContent,
+      toolCalls: toolCallsForMsg,
+      id: Date.now()
+    }]);
     setIsStreaming(false);
     setStreamContent('');
     setActiveTool(null);
@@ -197,77 +178,66 @@ export default function ChatInterface({ threadId, sessionId, indexedSources = []
     : 'Ask anything about your documents... (Shift+Enter for new line)';
 
   return (
-    <div style={{ height: '100%', display: 'flex', gap: 0, overflow: 'hidden' }}>
-
-      {/* Session sidebar panel */}
-      {sessionSidebar && (
-        <div style={{ width: 200, minWidth: 180, borderRight: '1px solid var(--border)', padding: '16px 12px', overflowY: 'auto', flexShrink: 0 }}>
-          {sessionSidebar}
+    <div className="chat-container" style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+      {/* Source pills */}
+      {indexedSources.length > 0 && (
+        <div style={{ padding: '10px 20px', borderBottom: '1px solid var(--border)', display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+          <span style={{ fontSize: 11, color: 'var(--text-muted)', marginRight: 4 }}>Indexed:</span>
+          {indexedSources.map((s, i) => (
+            <span key={i} className={`source-chip ${s.type || 'pdf'}`}>{s.name || s}</span>
+          ))}
         </div>
       )}
 
-      {/* Main chat column */}
-      <div className="chat-container" style={{ flex: 1, height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-        {/* Source pills */}
-        {indexedSources.length > 0 && (
-          <div style={{ padding: '10px 20px', borderBottom: '1px solid var(--border)', display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
-            <span style={{ fontSize: 11, color: 'var(--text-muted)', marginRight: 4 }}>Indexed:</span>
-            {indexedSources.map((s, i) => (
-              <span key={i} className={`source-chip ${s.type || 'pdf'}`}>{s.name || s}</span>
-            ))}
+      {/* Messages */}
+      <div className="chat-messages">
+        {messages.length === 0 && !isStreaming && (
+          <div style={{ textAlign: 'center', padding: '60px 20px', color: 'var(--text-muted)' }}>
+            <Bot size={48} style={{ margin: '0 auto 12px', opacity: 0.3 }} />
+            <p style={{ fontSize: 15, fontWeight: 500, color: 'var(--text-secondary)' }}>
+              {hasThread ? 'Ask me anything about your documents' : 'Upload a PDF to get started'}
+            </p>
+            <p style={{ fontSize: 13, marginTop: 6 }}>
+              I can search your documents, browse the web, crawl URLs, and more.
+            </p>
           </div>
         )}
 
-        {/* Messages */}
-        <div className="chat-messages">
-          {messages.length === 0 && !isStreaming && (
-            <div style={{ textAlign: 'center', padding: '60px 20px', color: 'var(--text-muted)' }}>
-              <Bot size={48} style={{ margin: '0 auto 12px', opacity: 0.3 }} />
-              <p style={{ fontSize: 15, fontWeight: 500, color: 'var(--text-secondary)' }}>
-                {hasThread ? 'Ask me anything about your documents' : 'Upload a PDF to get started'}
-              </p>
-              <p style={{ fontSize: 13, marginTop: 6 }}>
-                I can search your documents, browse the web, crawl URLs, and more.
-              </p>
-            </div>
-          )}
+        {messages.map(msg => <MessageBubble key={msg.id} msg={msg} />)}
+        {isStreaming && (
+          <StreamingBubble content={streamContent} activeTool={activeTool} activeInput={activeInput} />
+        )}
+        <div ref={bottomRef} />
+      </div>
 
-          {messages.map(msg => <MessageBubble key={msg.id} msg={msg} />)}
-          {isStreaming && (
-            <StreamingBubble content={streamContent} activeTool={activeTool} activeInput={activeInput} />
-          )}
-          <div ref={bottomRef} />
-        </div>
-
-        {/* Input area */}
-        <div className="chat-input-area">
-          <textarea
-            ref={textareaRef}
-            className="chat-input"
-            value={input}
-            onChange={e => setInput(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder={placeholderText}
-            disabled={isStreaming || !hasThread}
-            rows={1}
-            style={{ height: 'auto' }}
-            onInput={e => {
-              e.target.style.height = 'auto';
-              e.target.style.height = Math.min(e.target.scrollHeight, 140) + 'px';
-            }}
-          />
-          <button
-            className="btn btn-primary"
-            onClick={sendMessage}
-            disabled={!input.trim() || isStreaming || !hasThread}
-            style={{ height: 48, width: 48, padding: 0, justifyContent: 'center' }}
-          >
-            {isStreaming
-              ? <Loader2 size={18} className="spinner" />
-              : <Send size={18} />
-            }
-          </button>
-        </div>
+      {/* Input area */}
+      <div className="chat-input-area">
+        <textarea
+          ref={textareaRef}
+          className="chat-input"
+          value={input}
+          onChange={e => setInput(e.target.value)}
+          onKeyDown={handleKeyDown}
+          placeholder={placeholderText}
+          disabled={isStreaming || !hasThread}
+          rows={1}
+          style={{ height: 'auto' }}
+          onInput={e => {
+            e.target.style.height = 'auto';
+            e.target.style.height = Math.min(e.target.scrollHeight, 140) + 'px';
+          }}
+        />
+        <button
+          className="btn btn-primary"
+          onClick={sendMessage}
+          disabled={!input.trim() || isStreaming || !hasThread}
+          style={{ height: 48, width: 48, padding: 0, justifyContent: 'center' }}
+        >
+          {isStreaming
+            ? <Loader2 size={18} className="spinner" />
+            : <Send size={18} />
+          }
+        </button>
       </div>
     </div>
   );
