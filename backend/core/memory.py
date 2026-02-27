@@ -61,9 +61,9 @@ async def get_thread_messages(thread_id: str) -> List[Dict[str, Any]]:
     try:
         config = {"configurable": {"thread_id": thread_id}}
         state = await cp.aget(config)
-        if not state or not state.channel_values:
+        if not state or not hasattr(state, "values"):
             return []
-        msgs: List[BaseMessage] = state.channel_values.get("messages", [])
+        msgs: List[BaseMessage] = state.values.get("messages", [])
         result = []
         for m in msgs:
             if isinstance(m, HumanMessage):
