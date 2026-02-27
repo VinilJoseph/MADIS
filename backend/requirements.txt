@@ -1,0 +1,55 @@
+# Web Framework
+fastapi
+uvicorn[standard]
+python-multipart
+
+# PDF Processing
+pypdf
+pytesseract
+Pillow
+
+# LangChain & LangGraph
+langchain
+langchain-core
+langchain-groq
+langchain-community
+langgraph
+
+# LangSmith Tracing
+langsmith
+
+# MCP
+fastmcp
+langchain-mcp-adapters
+mcp[cli]
+
+# Vector DB / Embeddings
+supabase
+google-generativeai
+
+# Web Crawling & Search
+crawl4ai
+playwright
+duckduckgo-search
+ddgs
+socksio
+
+# Database
+sqlalchemy
+aiosqlite
+
+# LangGraph Persistence
+langgraph-checkpoint-sqlite
+
+# Environment & HTTP
+python-dotenv
+httpx
+requests
+
+# Data Validation
+pydantic
+
+# Utilities
+typing-extensions
+
+# playwright install
