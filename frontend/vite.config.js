@@ -6,20 +6,31 @@ export default defineConfig({
   plugins: [react()],
   server: {
     proxy: {
-      // /chat uses SSE streaming — disable proxy buffering so tokens flow in real-time
+      // /chat uses SSE streaming.
+      // Do NOT call proxyRes.pipe(res) here — Vite already pipes the response internally.
+      // Calling pipe() a second time sends every chunk twice, causing duplicate text.
+      // Just set headers to disable proxy buffering so SSE tokens flow in real-time.
       '/chat': {
         target: 'http://localhost:8000',
         changeOrigin: true,
-        // Disable response buffering for SSE
         configure: (proxy) => {
-          proxy.on('proxyRes', (proxyRes, req, res) => {
-            // Tell Node's http-proxy to flush chunks immediately (SSE support)
-            proxyRes.pipe(res, { end: true });
+          proxy.on('proxyRes', (proxyRes) => {
+            proxyRes.headers['x-accel-buffering'] = 'no';
+            proxyRes.headers['cache-control'] = 'no-cache';
           });
         },
       },
-      // All other backend API routes
-      '/ingest-pdf':  { target: 'http://localhost:8000', changeOrigin: true },
+      // /ingest-pdf also uses SSE streaming for real-time progress
+      '/ingest-pdf': {
+        target: 'http://localhost:8000',
+        changeOrigin: true,
+        configure: (proxy) => {
+          proxy.on('proxyRes', (proxyRes) => {
+            proxyRes.headers['x-accel-buffering'] = 'no';
+            proxyRes.headers['cache-control'] = 'no-cache';
+          });
+        },
+      },
       '/crawl':       { target: 'http://localhost:8000', changeOrigin: true },
       '/sessions':    { target: 'http://localhost:8000', changeOrigin: true },
       '/memory':      { target: 'http://localhost:8000', changeOrigin: true },

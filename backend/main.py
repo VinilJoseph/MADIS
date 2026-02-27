@@ -139,101 +139,147 @@ class CrawlResponse(BaseModel):
 # PDF Ingest
 # ─────────────────────────────────────────────────────────────────────────────
 
-@app.post("/ingest-pdf", response_model=IngestPDFResponse)
+@app.post("/ingest-pdf")
 async def ingest_pdf(
     file: UploadFile = File(...),
     thread_id: Optional[str] = Form(None),
 ):
     """
-    Upload a PDF:
-    1. Extract text
-    2. Chunk + embed + upsert to Supabase (long-term memory)
-    3. Run analysis graph (classify → extract ‖ summarize → insights)
-    4. Save to SQLite analytics DB
-    Returns full analysis + confirmation that RAG is ready.
+    Upload a PDF and stream real-time progress via SSE.
+    Events: extracting → embedding (N/M) → analyzing → done
+    The final 'done' event carries the full analysis JSON.
     """
-    logger.info("POST /ingest-pdf — filename=%s", file.filename)
+    logger.info("POST /ingest-pdf — filename=%s (SSE streaming)", file.filename)
     session_id = str(uuid.uuid4())
     t_id = thread_id or str(uuid.uuid4())
+    content = await file.read()
+    filename = file.filename
 
-    analytics_session = AnalyticsSession(session_id)
-    analytics_session.set_metadata(filename=file.filename)
+    async def progress_stream() -> AsyncGenerator[str, None]:
+        def evt(obj: dict) -> str:
+            return f"data: {json.dumps(obj)}\n\n"
 
-    try:
-        logger.debug("Reading file bytes for %s", file.filename)
-        content = await file.read()
-        raw_text = extract_text_from_pdf(content)
+        analytics_session = AnalyticsSession(session_id)
+        analytics_session.set_metadata(filename=filename)
 
-        if not raw_text:
-            raise HTTPException(
-                status_code=400,
-                detail="Could not extract text from PDF. It may be empty or image-only.",
-            )
+        try:
+            # Stage 1: Extract text
+            yield evt({"stage": "extracting", "message": "Extracting text from PDF..."})
+            await asyncio.sleep(0)  # flush
+            raw_text = extract_text_from_pdf(content)
+            if not raw_text:
+                yield evt({"stage": "error", "message": "Could not extract text. PDF may be empty or image-only."})
+                return
 
-        logger.debug("Extracted %d chars from PDF; chunking...", len(raw_text))
-        text_chunks = chunk_text(raw_text)
+            text_chunks = chunk_text(raw_text)
+            total_chunks = len(text_chunks)
+            logger.debug("Extracted %d chars, %d chunks", len(raw_text), total_chunks)
+            yield evt({"stage": "extracted", "chars": len(raw_text), "chunks": total_chunks})
+            await asyncio.sleep(0)
 
-        # ── Index into Supabase for long-term RAG ────────────────────────────
-        chunks_inserted = await upsert_chunks(
-            chunks=text_chunks,
-            source_name=file.filename,
-            source_type="pdf",
-            thread_id=t_id,
-            url=f"local://{file.filename}",
-        )
+            # Stage 2: Embed + upsert chunks (emit progress per chunk)
+            from core.vector_store import _ensure_supabase_connected, embed_text
+            import asyncio as _asyncio
 
-        # ── Run analysis graph ────────────────────────────────────────────────
-        initial_state: AgentState = {
-            "messages": [],
-            "thread_id": t_id,
-            "session_id": session_id,
-            "raw_text": raw_text,
-            "chunks": text_chunks,
-            "document_metadata": {
-                "filename": file.filename,
-                "text_length": len(raw_text),
-                "chunk_count": len(text_chunks),
-            },
-            "document_type": None,
-            "extracted_sections": {},
-            "summary": None,
-            "insights": [],
-            "indexed_sources": [file.filename],
-            "conversation_summary": None,
-            "agent_logs": [f"System: Received '{file.filename}' ({len(raw_text):,} chars, {len(text_chunks)} chunks)"],
-            "_token_tracker": analytics_session.token_tracker,
-            "_agent_tracker": analytics_session.agent_tracker,
-        }
+            sb = await _ensure_supabase_connected()
+            inserted = 0
 
-        logger.info("Invoking analysis_graph for session=%s thread=%s", session_id, t_id)
-        result_state = analysis_graph.invoke(initial_state)
-        analytics_report = analytics_session.get_full_report()
+            for i, chunk in enumerate(text_chunks):
+                yield evt({"stage": "embedding", "chunk": i + 1, "total": total_chunks,
+                           "message": f"Embedding chunk {i+1}/{total_chunks}..."})
+                await asyncio.sleep(0)
 
-        response_data = {
-            "session_id": session_id,
-            "thread_id": t_id,
-            "filename": file.filename,
-            "chunks_indexed": chunks_inserted,
-            "document_type": result_state.get("document_type", "Unknown"),
-            "summary": result_state.get("summary", ""),
-            "key_sections": result_state.get("extracted_sections", {}),
-            "insights": result_state.get("insights", []),
-            "agent_trace": result_state.get("agent_logs", []),
-            "analytics": analytics_report,
-        }
+                if not chunk.strip() or sb is None:
+                    continue
+                embedding = await embed_text(chunk)
+                if all(v == 0.0 for v in embedding):
+                    logger.warning("Zero embedding for chunk %d — skipping upsert", i)
+                    continue
 
-        # Persist to SQLite
-        logger.info("Saving analysis result for session=%s", session_id)
-        save_analysis(file.filename, response_data, session_id)
-        save_analytics_session(analytics_report)
+                from datetime import datetime, timezone as _tz
+                row = {
+                    "url": f"local://{filename}",
+                    "chunk_number": i,
+                    "title": filename,
+                    "summary": chunk[:200],
+                    "content": chunk,
+                    "metadata": {
+                        "source": "pdf",
+                        "filename": filename,
+                        "thread_id": t_id,
+                        "chunk_size": len(chunk),
+                        "crawled_at": datetime.now(_tz.utc).isoformat(),
+                    },
+                    "embedding": embedding,
+                }
+                try:
+                    await asyncio.to_thread(
+                        lambda r=row: sb.table("site_pages").upsert(r, on_conflict="url,chunk_number").execute()
+                    )
+                    inserted += 1
+                except Exception as ue:
+                    logger.error("Upsert error chunk %d: %s", i, ue)
 
-        return IngestPDFResponse(**response_data)
+            yield evt({"stage": "embedded", "inserted": inserted, "total": total_chunks})
+            await asyncio.sleep(0)
 
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.exception("Unhandled error in /ingest-pdf: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+            # Stage 3: Analysis graph
+            yield evt({"stage": "analyzing", "message": "Running AI analysis pipeline..."})
+            await asyncio.sleep(0)
+
+            initial_state: AgentState = {
+                "messages": [],
+                "thread_id": t_id,
+                "session_id": session_id,
+                "raw_text": raw_text,
+                "chunks": text_chunks,
+                "document_metadata": {
+                    "filename": filename,
+                    "text_length": len(raw_text),
+                    "chunk_count": len(text_chunks),
+                },
+                "document_type": None,
+                "extracted_sections": {},
+                "summary": None,
+                "insights": [],
+                "indexed_sources": [filename],
+                "conversation_summary": None,
+                "agent_logs": [f"System: Received '{filename}' ({len(raw_text):,} chars, {len(text_chunks)} chunks)"],
+                "_token_tracker": analytics_session.token_tracker,
+                "_agent_tracker": analytics_session.agent_tracker,
+            }
+
+            result_state = await asyncio.to_thread(analysis_graph.invoke, initial_state)
+            analytics_report = analytics_session.get_full_report()
+
+            response_data = {
+                "session_id": session_id,
+                "thread_id": t_id,
+                "filename": filename,
+                "chunks_indexed": inserted,
+                "document_type": result_state.get("document_type", "Unknown"),
+                "summary": result_state.get("summary", ""),
+                "key_sections": result_state.get("extracted_sections", {}),
+                "insights": result_state.get("insights", []),
+                "agent_trace": result_state.get("agent_logs", []),
+                "analytics": analytics_report,
+            }
+
+            save_analysis(filename, response_data, session_id)
+            save_analytics_session(analytics_report)
+
+            # Stage 4: Done — send full result
+            yield evt({"stage": "done", "data": response_data})
+
+        except Exception as e:
+            logger.exception("Error in /ingest-pdf SSE stream: %s", e)
+            yield evt({"stage": "error", "message": str(e)})
+
+    return StreamingResponse(
+        progress_stream(),
+        media_type="text/event-stream",
+        headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"},
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -296,28 +342,33 @@ async def chat(req: ChatRequest):
                 if isinstance(msg_chunk, (AIMessage, AIMessageChunk)):
                     content = msg_chunk.content
 
-                    # Notify frontend when the LLM decides to call a tool
-                    # AIMessageChunk has tool_call_chunks; AIMessage has tool_calls
+                    # Collect tool calls on this message
                     tool_calls = (
                         getattr(msg_chunk, "tool_call_chunks", None) or
                         getattr(msg_chunk, "tool_calls", None) or []
                     )
+                    has_tool_calls = bool(tool_calls)
+
+                    # Notify frontend of any tool about to be called
                     for tc in tool_calls:
                         name = tc.get("name") if isinstance(tc, dict) else getattr(tc, "name", None)
                         if name:
                             yield f"data: {json.dumps({'type': 'tool_start', 'tool': name, 'input': ''})}\n\n"
 
-                    # Only emit text content — skip pure tool-call messages (empty content)
-                    if isinstance(content, str) and content.strip():
-                        yield f"data: {json.dumps({'type': 'token', 'content': content})}\n\n"
-                    elif isinstance(content, list):
-                        # Groq sometimes returns list of content blocks
-                        text = "".join(
-                            p.get("text", "") if isinstance(p, dict) else str(p)
-                            for p in content
-                        ).strip()
-                        if text:
-                            yield f"data: {json.dumps({'type': 'token', 'content': text})}\n\n"
+                    # Suppress text from messages that also have tool_calls.
+                    # These are just LLM preamble ("I'll check the PDF...") that
+                    # the LLM repeats in the final answer, causing duplicate text.
+                    # Only the final AIMessage (tool_calls=[]) emits its text.
+                    if not has_tool_calls:
+                        if isinstance(content, str) and content.strip():
+                            yield f"data: {json.dumps({'type': 'token', 'content': content})}\n\n"
+                        elif isinstance(content, list):
+                            text = "".join(
+                                p.get("text", "") if isinstance(p, dict) else str(p)
+                                for p in content
+                            ).strip()
+                            if text:
+                                yield f"data: {json.dumps({'type': 'token', 'content': text})}\n\n"
 
                 elif isinstance(msg_chunk, ToolMessage):
                     # Tool has finished — notify the frontend
@@ -388,20 +439,69 @@ async def crawl(req: CrawlRequest):
 
 @app.get("/sessions")
 async def get_sessions():
-    """List all chat thread IDs with persisted state."""
+    """List all chat sessions with metadata for the session switcher UI."""
     logger.info("GET /sessions")
+    from core.memory import get_thread_messages
+    from core.vector_store import list_indexed_sources
     threads = await retrieve_all_threads()
-    return {"sessions": threads, "count": len(threads)}
+
+    sessions = []
+    for tid in threads:
+        msgs = await get_thread_messages(tid)
+        # Find the last non-empty AI message for preview
+        preview = ""
+        timestamp = None
+        for m in reversed(msgs):
+            if m["role"] == "ai" and m["content"].strip():
+                preview = m["content"][:80]
+                break
+        # Try to get indexed sources for this thread
+        try:
+            sources = await list_indexed_sources(tid)
+        except Exception:
+            sources = []
+        sessions.append({
+            "thread_id": tid,
+            "message_count": len(msgs),
+            "last_message_preview": preview,
+            "sources": [s.get("filename", s.get("url", "")) for s in sources],
+        })
+
+    # Sort: sessions with most messages first
+    sessions.sort(key=lambda s: s["message_count"], reverse=True)
+    return {"sessions": sessions, "count": len(sessions)}
+
+
+@app.get("/chat/history/{thread_id}")
+async def get_chat_history(thread_id: str):
+    """
+    Return the full message history for a thread in chat-display format.
+    Used by the frontend to hydrate messages after a page refresh.
+    """
+    logger.info("GET /chat/history/%s", thread_id)
+    from core.memory import get_thread_messages
+    from core.vector_store import list_indexed_sources
+
+    msgs = await get_thread_messages(thread_id)
+    try:
+        sources = await list_indexed_sources(thread_id)
+    except Exception:
+        sources = []
+
+    # Filter: only return messages that have actual text content
+    displayable = [m for m in msgs if m.get("content", "").strip()]
+    return {
+        "thread_id": thread_id,
+        "messages": displayable,
+        "sources": [s.get("filename", s.get("url", "")) for s in sources],
+        "message_count": len(displayable),
+    }
 
 
 @app.get("/memory/{thread_id}")
 async def get_memory(thread_id: str):
+    """Get combined memory overview (short-term SQLite + long-term Supabase)."""
     logger.info("GET /memory/%s", thread_id)
-    """
-    Get combined memory overview for a thread:
-    - short_term: recent conversation messages (from SqliteSaver)
-    - long_term:  list of indexed sources (from Supabase)
-    """
     return await get_memory_overview(thread_id)
 
 
