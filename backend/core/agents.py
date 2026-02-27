@@ -253,7 +253,7 @@ llm_with_tools = get_llm(streaming=True).bind_tools(ALL_TOOLS)
 
 
 @traceable(name="chat_node", tags=["rag-chat", "llm"])
-def chat_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
+async def chat_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
     logger.info("chat_node: invoked (message count=%d)", len(state.get('messages', [])))
     """
     Primary RAG chat node.
@@ -293,6 +293,6 @@ def chat_node(state: AgentState, config: RunnableConfig | None = None) -> dict:
     messages = [SystemMessage(content=system_prompt)] + list(state["messages"])
 
     logger.debug("chat_node: calling LLM with tools")
-    response = llm_with_tools.invoke(messages, config=config)
+    response = await llm_with_tools.ainvoke(messages, config=config)
     logger.info("chat_node: LLM response received — tool_calls=%d", len(getattr(response, 'tool_calls', [])))
     return {"messages": [response]}

@@ -113,7 +113,7 @@ async def get_memory_overview(thread_id: str) -> Dict[str, Any]:
     Used by GET /memory/{thread_id} endpoint.
     """
     short_term = await get_thread_messages(thread_id)
-    long_term_sources = list_indexed_sources(thread_id)
+    long_term_sources = await list_indexed_sources(thread_id)
 
     return {
         "thread_id": thread_id,

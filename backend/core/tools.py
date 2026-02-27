@@ -33,14 +33,15 @@ _ddg = DuckDuckGoSearchRun(region="us-en")
 
 
 @tool
-def web_search_tool(query: str) -> str:
+async def web_search_tool(query: str) -> str:
     """
     Search the web for up-to-date information using DuckDuckGo.
     Use for current events, recent news, or facts not in indexed documents.
     """
+    import asyncio
     logger.info("web_search_tool: query=%r", query[:80])
     try:
-        result = _ddg.run(query)
+        result = await asyncio.to_thread(_ddg.run, query)
         logger.debug("web_search_tool: returned %d chars", len(result))
         return result
     except Exception as e:
@@ -51,26 +52,15 @@ def web_search_tool(query: str) -> str:
 # ── RAG retrieval from Supabase ───────────────────────────────────────────────
 
 @tool
-def rag_tool(query: str, thread_id: Optional[str] = None) -> str:
+async def rag_tool(query: str, thread_id: Optional[str] = None) -> str:
     """
     Retrieve relevant information from indexed documents (PDFs and crawled web pages).
     Always call this first when a user asks about uploaded documents or any indexed content.
     Include thread_id so only documents relevant to this conversation are returned.
     """
-    import asyncio
     logger.info("rag_tool: query=%r thread_id=%s", query[:80], thread_id)
 
-    async def _search():
-        return await similarity_search(query=query, thread_id=thread_id, k=5)
-
-    try:
-        results = asyncio.run(_search())
-    except RuntimeError:
-        # If already inside an event loop (e.g. uvicorn async context)
-        import concurrent.futures
-        with concurrent.futures.ThreadPoolExecutor() as pool:
-            future = pool.submit(asyncio.run, _search())
-            results = future.result()
+    results = await similarity_search(query=query, thread_id=thread_id, k=5)
 
     if not results:
         logger.warning("rag_tool: no results found for query=%r thread_id=%s", query[:80], thread_id)
@@ -90,27 +80,17 @@ def rag_tool(query: str, thread_id: Optional[str] = None) -> str:
 # ── crawl4AI web ingestion ────────────────────────────────────────────────────
 
 @tool
-def crawl_url_tool(url: str, thread_id: Optional[str] = None) -> str:
+async def crawl_url_tool(url: str, thread_id: Optional[str] = None) -> str:
     """
     Crawl a web URL using crawl4AI, extract the content, and index it into the
     knowledge base so it can be retrieved via rag_tool.
     Returns a summary of what was indexed.
     Use this when the user wants to add a website to the knowledge base.
     """
-    import asyncio
     from core.crawler import crawl_and_ingest_url
     logger.info("crawl_url_tool: url=%s thread_id=%s", url, thread_id)
 
-    async def _crawl():
-        return await crawl_and_ingest_url(url=url, thread_id=thread_id or "default")
-
-    try:
-        result = asyncio.run(_crawl())
-    except RuntimeError:
-        import concurrent.futures
-        with concurrent.futures.ThreadPoolExecutor() as pool:
-            future = pool.submit(asyncio.run, _crawl())
-            result = future.result()
+    result = await crawl_and_ingest_url(url=url, thread_id=thread_id or "default")
 
     if result.get("success"):
         logger.info("crawl_url_tool: success url=%s chunks=%d", url, result['chunks_inserted'])

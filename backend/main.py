@@ -258,7 +258,7 @@ async def chat(req: ChatRequest):
     }
 
     # Get current indexed sources for system prompt context
-    sources = list_indexed_sources(req.thread_id)
+    sources = await list_indexed_sources(req.thread_id)
     source_names = [s.get("filename") or s.get("url", "") for s in sources]
 
     # Build initial input — checkpointer auto-replays all prior messages

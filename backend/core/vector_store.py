@@ -211,14 +211,14 @@ async def similarity_search(
 
 # ── Source listing ────────────────────────────────────────────────────────────
 
-def list_indexed_sources(thread_id: str) -> List[Dict[str, Any]]:
+async def list_indexed_sources(thread_id: str) -> List[Dict[str, Any]]:
     """Return all unique sources indexed for a given thread. Returns [] if Supabase not configured."""
-    sb = get_supabase()
+    sb = await _ensure_supabase_connected()
     if sb is None:
         return []
     try:
-        result = (
-            sb.table("site_pages")
+        result = await asyncio.to_thread(
+            lambda: sb.table("site_pages")
             .select("url, title, metadata, chunk_number")
             .execute()
         )
