@@ -11,6 +11,7 @@ Tools available to the LLM:
 
 from __future__ import annotations
 
+import contextvars
 import logging
 import os
 from typing import Optional
@@ -26,6 +27,12 @@ from core.vector_store import similarity_search, upsert_chunks
 
 load_dotenv()
 
+# ── Thread-id context (set by chat_node before LLM invocation) ──────────────
+# This avoids relying on the LLM to pass thread_id as a tool argument.
+_current_thread_id: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+    "current_thread_id", default=None
+)
+
 ALPHA_VANTAGE_API_KEY = os.getenv("ALPHAVANTAGE_API_KEY", "")
 
 # ── DuckDuckGo web search ─────────────────────────────────────────────────────
@@ -33,14 +40,15 @@ _ddg = DuckDuckGoSearchRun(region="us-en")
 
 
 @tool
-def web_search_tool(query: str) -> str:
+async def web_search_tool(query: str) -> str:
     """
     Search the web for up-to-date information using DuckDuckGo.
     Use for current events, recent news, or facts not in indexed documents.
     """
+    import asyncio
     logger.info("web_search_tool: query=%r", query[:80])
     try:
-        result = _ddg.run(query)
+        result = await asyncio.to_thread(_ddg.run, query)
         logger.debug("web_search_tool: returned %d chars", len(result))
         return result
     except Exception as e:
@@ -51,26 +59,16 @@ def web_search_tool(query: str) -> str:
 # ── RAG retrieval from Supabase ───────────────────────────────────────────────
 
 @tool
-def rag_tool(query: str, thread_id: Optional[str] = None) -> str:
+async def rag_tool(query: str) -> str:
     """
     Retrieve relevant information from indexed documents (PDFs and crawled web pages).
     Always call this first when a user asks about uploaded documents or any indexed content.
-    Include thread_id so only documents relevant to this conversation are returned.
     """
-    import asyncio
+    # Read thread_id from context (set by chat_node before LLM is called)
+    thread_id = _current_thread_id.get()
     logger.info("rag_tool: query=%r thread_id=%s", query[:80], thread_id)
 
-    async def _search():
-        return await similarity_search(query=query, thread_id=thread_id, k=5)
-
-    try:
-        results = asyncio.run(_search())
-    except RuntimeError:
-        # If already inside an event loop (e.g. uvicorn async context)
-        import concurrent.futures
-        with concurrent.futures.ThreadPoolExecutor() as pool:
-            future = pool.submit(asyncio.run, _search())
-            results = future.result()
+    results = await similarity_search(query=query, thread_id=thread_id, k=5)
 
     if not results:
         logger.warning("rag_tool: no results found for query=%r thread_id=%s", query[:80], thread_id)
@@ -90,37 +88,28 @@ def rag_tool(query: str, thread_id: Optional[str] = None) -> str:
 # ── crawl4AI web ingestion ────────────────────────────────────────────────────
 
 @tool
-def crawl_url_tool(url: str, thread_id: Optional[str] = None) -> str:
+async def crawl_url_tool(url: str) -> str:
     """
     Crawl a web URL using crawl4AI, extract the content, and index it into the
     knowledge base so it can be retrieved via rag_tool.
     Returns a summary of what was indexed.
     Use this when the user wants to add a website to the knowledge base.
     """
-    import asyncio
     from core.crawler import crawl_and_ingest_url
+    thread_id = _current_thread_id.get()
     logger.info("crawl_url_tool: url=%s thread_id=%s", url, thread_id)
 
-    async def _crawl():
-        return await crawl_and_ingest_url(url=url, thread_id=thread_id or "default")
-
-    try:
-        result = asyncio.run(_crawl())
-    except RuntimeError:
-        import concurrent.futures
-        with concurrent.futures.ThreadPoolExecutor() as pool:
-            future = pool.submit(asyncio.run, _crawl())
-            result = future.result()
+    result = await crawl_and_ingest_url(url=url, thread_id=thread_id or "default")
 
     if result.get("success"):
         logger.info("crawl_url_tool: success url=%s chunks=%d", url, result['chunks_inserted'])
         return (
-            f"✅ Crawled and indexed: {url}\n"
+            f"Crawled and indexed: {url}\n"
             f"Chunks indexed: {result['chunks_inserted']}\n"
             f"Content preview: {result['preview']}"
         )
     logger.warning("crawl_url_tool: failed url=%s error=%s", url, result.get('error', 'Unknown error'))
-    return f"❌ Crawl failed for {url}: {result.get('error', 'Unknown error')}"
+    return f"Crawl failed for {url}: {result.get('error', 'Unknown error')}"
 
 
 # ── Calculator ────────────────────────────────────────────────────────────────

@@ -47,7 +47,7 @@ async def list_sources_tool(thread_id: str) -> dict:
     List all documents and web pages indexed in long-term memory for a thread.
     """
     from core.vector_store import list_indexed_sources
-    sources = list_indexed_sources(thread_id)
+    sources = await list_indexed_sources(thread_id)
     return {"thread_id": thread_id, "sources": sources}
 
 

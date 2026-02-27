@@ -6,17 +6,38 @@ export default defineConfig({
   plugins: [react()],
   server: {
     proxy: {
-      // Proxy all backend API routes to FastAPI on port 8000
-      '/ingest-pdf':    'http://localhost:8000',
-      '/chat':          'http://localhost:8000',
-      '/crawl':         'http://localhost:8000',
-      '/sessions':      'http://localhost:8000',
-      '/memory':        'http://localhost:8000',
-      '/analytics':     'http://localhost:8000',
-      '/mcp':           'http://localhost:8000',
-      '/health':        'http://localhost:8000',
-      // Legacy endpoint (kept for backward compat)
-      '/analyze-pdf':   'http://localhost:8000',
+      // /chat uses SSE streaming.
+      // Do NOT call proxyRes.pipe(res) here — Vite already pipes the response internally.
+      // Calling pipe() a second time sends every chunk twice, causing duplicate text.
+      // Just set headers to disable proxy buffering so SSE tokens flow in real-time.
+      '/chat': {
+        target: 'http://localhost:8000',
+        changeOrigin: true,
+        configure: (proxy) => {
+          proxy.on('proxyRes', (proxyRes) => {
+            proxyRes.headers['x-accel-buffering'] = 'no';
+            proxyRes.headers['cache-control'] = 'no-cache';
+          });
+        },
+      },
+      // /ingest-pdf also uses SSE streaming for real-time progress
+      '/ingest-pdf': {
+        target: 'http://localhost:8000',
+        changeOrigin: true,
+        configure: (proxy) => {
+          proxy.on('proxyRes', (proxyRes) => {
+            proxyRes.headers['x-accel-buffering'] = 'no';
+            proxyRes.headers['cache-control'] = 'no-cache';
+          });
+        },
+      },
+      '/crawl':       { target: 'http://localhost:8000', changeOrigin: true },
+      '/sessions':    { target: 'http://localhost:8000', changeOrigin: true },
+      '/memory':      { target: 'http://localhost:8000', changeOrigin: true },
+      '/analytics':   { target: 'http://localhost:8000', changeOrigin: true },
+      '/mcp':         { target: 'http://localhost:8000', changeOrigin: true },
+      '/health':      { target: 'http://localhost:8000', changeOrigin: true },
+      '/analyze-pdf': { target: 'http://localhost:8000', changeOrigin: true },
     }
   }
 })
