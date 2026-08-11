@@ -9,7 +9,7 @@
 
 ---
 
-## 🚀 Key Technical Features (Job-Market Keywords)
+## 🚀 Key Technical Features (Keywords)
 
 - **Agentic Orchestration**: Built with **LangGraph**, utilizing **State Machines**, **Conditional Routing**, and **Parallel Fan-out/Fan-in** patterns for robust agent coordination.
 - **Advanced RAG Pipeline**: Implementing **Semantic Search** with **Gemini Embeddings** and **Supabase pgvector** for high-performance long-term memory.
